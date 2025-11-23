@@ -5,4 +5,8 @@ edition = "2024"
 
 [dependencies]
 rand = "0.8"
+rand_core = "0.5.1"
+x25519-dalek = "1"
 blake3 = "1"
+sha2 = "0.10"
+hex = "0.4"
