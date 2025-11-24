@@ -1,7 +1,6 @@
 use blake3::Hasher;
 use rand_core::{OsRng, RngCore};
 use std::collections::HashMap;
-use x25519_dalek::{StaticSecret, PublicKey};
 
 /// 128-bit symmetric key for a label.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -85,13 +84,13 @@ impl AndTable {
     }
 
     /// evaluator chooses row index via known bits (alpha,beta)
-    // pub fn eval_with_index(&self, a_lbl: &Label, b_lbl: &Label, alpha: u8, beta: u8) -> Label {
-    //     let idx = (alpha as usize) * 2 + (beta as usize);
-    //     let mask = kdf2(a_lbl, b_lbl, self.gid);
-    //     let mut out = [0u8;16];
-    //     for i in 0..16 { out[i] = self.rows[idx][i] ^ mask[i]; }
-    //     Label(out)
-    // }
+    pub fn eval_with_index(&self, a_lbl: &Label, b_lbl: &Label, alpha: u8, beta: u8) -> Label {
+        let idx = (alpha as usize) * 2 + (beta as usize);
+        let mask = kdf2(a_lbl, b_lbl, self.gid);
+        let mut out = [0u8;16];
+        for i in 0..16 { out[i] = self.rows[idx][i] ^ mask[i]; }
+        Label(out)
+    }
 
     /// evaluator doesn't want to use index (try all rows)
     pub fn eval_without_index(&self, a_lbl: &Label, b_lbl: &Label) -> Vec<Label> {
@@ -133,5 +132,70 @@ impl IdentityTable {
         for i in 0..16 { cand1[i] = self.ct1[i] ^ pad[i]; }
         
         GarbledWire{l0: Label(cand0), l1:Label(cand1)}
+    }
+}
+
+/// Encoded garbled circuit (simple list of wires, one AND table)
+#[derive(Clone, Debug)]
+pub struct GarbledCircuit {
+    pub wires: Vec<GarbledWire>,          // all wires
+    pub and_tables: Vec<(usize, usize, usize, AndTable)>, // (a_idx,b_idx,out_idx, table)
+    //pub id_tables: Vec<(usize, usize, IdentityTable)>, // input->output identity tables
+    pub output_map: HashMap<Label,bool>,  // mapping of output label -> bit
+}
+
+impl GarbledCircuit {
+    pub fn new_empty() -> Self {
+        Self { wires: Vec::new(), and_tables: Vec::new(), output_map: HashMap::new() }
+    }
+}
+
+/// Garbler: constructs garbled circuit
+pub struct Garbler {}
+
+impl Garbler {
+    pub fn garble_and_build_example() -> (GarbledCircuit, usize, usize, usize) {
+        // Build small circuit: O = A AND B
+        // wires[0] = A, wires[1] = B, wires[2] = O
+        let mut gc = GarbledCircuit::new_empty();
+        let wa = GarbledWire::new();
+        let wb = GarbledWire::new();
+        let wo = GarbledWire::new();
+
+        let a_idx = gc.wires.len(); gc.wires.push(wa);
+        let b_idx = gc.wires.len(); gc.wires.push(wb);
+        let o_idx = gc.wires.len(); gc.wires.push(wo);
+
+        let gid = 1u64;
+        let at = AndTable::new(gid, &gc.wires[a_idx], &gc.wires[b_idx], &gc.wires[o_idx]);
+        gc.and_tables.push((a_idx,b_idx,o_idx,at));
+
+        // register output map for decoder
+        gc.output_map.insert(gc.wires[o_idx].l0, false);
+        gc.output_map.insert(gc.wires[o_idx].l1, true);
+
+        (gc, a_idx, b_idx, o_idx)
+    }
+}
+
+/// Evaluator: receives garbled circuit and input labels, evaluates
+pub struct Evaluator {}
+
+impl Evaluator {
+    /// Evaluate the single AND circuit, given labels for input wires and their clear bits.
+    pub fn eval_and(gc: &GarbledCircuit, a_lbl: Label, b_lbl: Label, a_bit: u8, b_bit: u8) -> bool {
+        // find the single and table
+        assert_eq!(gc.and_tables.len(), 1, "example expects one AND");
+        let (_a_idx, _b_idx, _out_idx, table) = &gc.and_tables[0];
+
+        // compute output label
+        let out_lbl = table.eval_with_index(&a_lbl, &b_lbl, a_bit, b_bit);
+
+        // decode via output_map
+        if let Some(v) = gc.output_map.get(&out_lbl) {
+            *v
+        } else {
+            panic!("output label not recognized");
+        }
     }
 }
